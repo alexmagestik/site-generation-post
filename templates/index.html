@@ -193,6 +193,15 @@
             </div>
             <textarea class="post-text" id="postText" rows="15"
                       aria-label="Готовый пост — можно редактировать">{{ result }}</textarea>
+            {% if result_url %}
+              <a class="product-link" href="{{ result_url }}" target="_blank" rel="noopener noreferrer">
+                <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M10 13a5 5 0 0 0 7.54.54l2-2a5 5 0 0 0-7.07-7.07l-1.14 1.14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                  <path d="M14 11a5 5 0 0 0-7.54-.54l-2 2a5 5 0 0 0 7.07 7.07l1.14-1.14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                </svg>
+                Открыть карточку товара
+              </a>
+            {% endif %}
           {% else %}
             <div class="empty-state">
               <span class="empty-icon">
@@ -257,7 +266,7 @@
             <button type="button" class="btn btn--schedule" id="scheduleBtn">Запланировать</button>
             <button type="button" class="btn btn--ghost" id="scheduleCancelBtn">Отмена</button>
           </div>
-          <p class="hint hint--dark">По умолчанию +1 час. Минимум +10 минут.</p>
+          <p class="hint hint--dark">По умолчанию +1 час. Минимум +10 минут. Публикация выполнится, пока приложение запущено.</p>
         </div>
 
         <div class="action-status" id="actionStatus" role="status" aria-live="polite"></div>
@@ -277,11 +286,15 @@
 
           <div class="saved-list" id="favoritesList">
             {% for favorite in favorites %}
-              <article class="saved-item" data-favorite-id="{{ favorite.id }}">
+              <article class="saved-item" data-item-kind="favorite" data-item-id="{{ favorite.id }}">
                 <p class="saved-text">{{ favorite.text }}</p>
+                <div class="saved-actions">
+                  <button type="button" class="mini-btn" data-item-action="edit">Редактировать</button>
+                  <button type="button" class="mini-btn mini-btn--vk" data-item-action="publish">Опубликовать</button>
+                  <button type="button" class="link-btn" data-item-action="delete">Удалить</button>
+                </div>
                 <div class="saved-footer">
                   <span>{{ favorite.created_at_display }}</span>
-                  <button type="button" class="link-btn" data-delete-favorite="{{ favorite.id }}">Удалить</button>
                 </div>
               </article>
             {% endfor %}
@@ -302,15 +315,43 @@
 
           <div class="saved-list" id="scheduledList">
             {% for item in scheduled %}
-              <article class="saved-item saved-item--scheduled" data-scheduled-id="{{ item.id }}" data-scheduled-at="{{ item.scheduled_at }}">
-                <div class="saved-schedule-time">
-                  <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                    <circle cx="12" cy="12" r="8.5" stroke="currentColor" stroke-width="1.7"/>
-                    <path d="M12 7.5V12l3 2" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
-                  </svg>
-                  {{ item.scheduled_at_display }}
+              <article class="saved-item saved-item--scheduled"
+                       data-item-kind="scheduled"
+                       data-item-id="{{ item.id }}"
+                       data-scheduled-at="{{ item.scheduled_at }}"
+                       data-status="{{ item.status }}">
+                <div class="saved-topline">
+                  <div class="saved-schedule-time">
+                    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                      <circle cx="12" cy="12" r="8.5" stroke="currentColor" stroke-width="1.7"/>
+                      <path d="M12 7.5V12l3 2" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                    {{ item.scheduled_at_display }}
+                  </div>
+                  {% if item.status == 'error' %}
+                    <span class="status-pill status-pill--error">Ошибка</span>
+                  {% elif item.status == 'vk_scheduled' %}
+                    <span class="status-pill">ВКонтакте</span>
+                  {% else %}
+                    <span class="status-pill status-pill--pending">Ожидает</span>
+                  {% endif %}
                 </div>
+
+                {% if item.status == 'error' %}
+                  <p class="saved-note saved-note--error">Не удалось опубликовать. Попробуйте «Опубликовать сейчас».</p>
+                {% elif item.status == 'vk_scheduled' %}
+                  <p class="saved-note">Пост запланирован на стороне ВКонтакте.</p>
+                {% endif %}
+
                 <p class="saved-text">{{ item.text }}</p>
+
+                <div class="saved-actions">
+                  <button type="button" class="mini-btn" data-item-action="edit"
+                          {% if item.status == 'vk_scheduled' %}disabled title="Пост уже запланирован ВКонтакте"{% endif %}>Редактировать</button>
+                  <button type="button" class="mini-btn mini-btn--vk" data-item-action="publish"
+                          {% if item.status == 'vk_scheduled' %}disabled title="Пост уже запланирован ВКонтакте"{% endif %}>Опубликовать сейчас</button>
+                  <button type="button" class="link-btn" data-item-action="delete">Удалить</button>
+                </div>
               </article>
             {% endfor %}
           </div>

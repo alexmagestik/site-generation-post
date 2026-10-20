@@ -3,6 +3,7 @@ import json
 import os
 import re
 import threading
+import time
 import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -42,6 +43,12 @@ VK_AVAILABLE = bool(VK_ACCESS_TOKEN and VK_GROUP_ID)
 FAVORITES_FILE = BASE_DIR / "favorites.json"
 SCHEDULED_FILE = BASE_DIR / "scheduled.json"
 DATA_LOCK = threading.Lock()
+
+# Фоновый планировщик отложенных постов (запускается при первом запросе).
+SCHEDULER_STARTED = False
+SCHEDULER_LOCK = threading.Lock()
+SCHEDULER_INTERVAL = 15
+
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -199,6 +206,28 @@ def add_favorite(text):
     return item
 
 
+def update_favorite(favorite_id, text):
+    text = (text or "").strip()
+    if not text:
+        raise ValueError("Пост пуст")
+
+    with DATA_LOCK:
+        items = load_json_list(FAVORITES_FILE)
+        updated = None
+        for item in items:
+            if item.get("id") == favorite_id:
+                item["text"] = text
+                item["updated_at"] = datetime.now().astimezone().isoformat(timespec="seconds")
+                updated = dict(item)
+                break
+        if updated is None:
+            return None
+        save_json_list(FAVORITES_FILE, items)
+
+    updated["created_at_display"] = format_datetime(updated.get("created_at"))
+    return updated
+
+
 def delete_favorite(favorite_id):
     with DATA_LOCK:
         items = load_json_list(FAVORITES_FILE)
@@ -209,22 +238,42 @@ def delete_favorite(favorite_id):
     return True
 
 
+def normalize_scheduled(items):
+    changed = False
+    for item in items:
+        if not item.get("status"):
+            # Старые записи уже были запланированы средствами ВКонтакте.
+            item["status"] = "vk_scheduled" if item.get("post_id") else "pending"
+            changed = True
+    return changed
+
+
+def parse_scheduled_datetime(value):
+    scheduled_dt = datetime.fromisoformat(value)
+    if scheduled_dt.tzinfo is None:
+        scheduled_dt = scheduled_dt.astimezone()
+    return scheduled_dt
+
+
+
 def get_scheduled():
     with DATA_LOCK:
         items = load_json_list(SCHEDULED_FILE)
+        if normalize_scheduled(items):
+            save_json_list(SCHEDULED_FILE, items)
     items.sort(key=lambda item: item.get("scheduled_at", ""))
     for item in items:
         item["scheduled_at_display"] = format_datetime(item.get("scheduled_at"))
     return items
 
 
-def add_scheduled(text, scheduled_dt, post_id=None):
+def add_scheduled(text, scheduled_dt):
     item = {
         "id": uuid.uuid4().hex,
         "text": text,
         "scheduled_at": scheduled_dt.isoformat(timespec="seconds"),
         "created_at": datetime.now().astimezone().isoformat(timespec="seconds"),
-        "post_id": post_id,
+        "status": "pending",
     }
 
     with DATA_LOCK:
@@ -235,6 +284,38 @@ def add_scheduled(text, scheduled_dt, post_id=None):
 
     item["scheduled_at_display"] = format_datetime(item["scheduled_at"])
     return item
+
+
+def update_scheduled(scheduled_id, text):
+    text = (text or "").strip()
+    if not text:
+        raise ValueError("Пост пуст")
+
+    with DATA_LOCK:
+        items = load_json_list(SCHEDULED_FILE)
+        updated = None
+        for item in items:
+            if item.get("id") == scheduled_id:
+                item["text"] = text
+                item["updated_at"] = datetime.now().astimezone().isoformat(timespec="seconds")
+                updated = dict(item)
+                break
+        if updated is None:
+            return None
+        save_json_list(SCHEDULED_FILE, items)
+
+    updated["scheduled_at_display"] = format_datetime(updated.get("scheduled_at"))
+    return updated
+
+
+def delete_scheduled(scheduled_id):
+    with DATA_LOCK:
+        items = load_json_list(SCHEDULED_FILE)
+        remaining = [item for item in items if item.get("id") != scheduled_id]
+        if len(remaining) == len(items):
+            return False
+        save_json_list(SCHEDULED_FILE, remaining)
+    return True
 
 
 def publish_to_vk(text, publish_date=None):
@@ -264,6 +345,94 @@ def get_post_id(response):
     if post_id is None and isinstance(response, dict):
         post_id = response.get("post_id")
     return post_id
+
+
+def publish_due_scheduled():
+    """Публикует локально отложенные посты, у которых наступило время."""
+    now = datetime.now().astimezone()
+    due = []
+
+    with DATA_LOCK:
+        items = load_json_list(SCHEDULED_FILE)
+        changed = normalize_scheduled(items)
+        remaining = []
+
+        for item in items:
+            status = item.get("status", "pending")
+            try:
+                scheduled_dt = parse_scheduled_datetime(item.get("scheduled_at", ""))
+            except (TypeError, ValueError):
+                remaining.append(item)
+                continue
+
+            # Старые записи были запланированы через VK — просто убираем их
+            # из локального списка после наступления времени публикации.
+            if status == "vk_scheduled":
+                if scheduled_dt <= now:
+                    changed = True
+                    continue
+
+            # Новые записи публикуем сами, когда наступает время.
+            elif status == "pending" and scheduled_dt <= now:
+                due.append(dict(item))
+                changed = True
+                continue
+
+            remaining.append(item)
+
+        if changed:
+            save_json_list(SCHEDULED_FILE, remaining)
+
+    for item in due:
+        try:
+            publish_to_vk(item["text"])
+            app.logger.info("Отложенный пост %s опубликован", item["id"])
+        except Exception as exc:
+            app.logger.warning(
+                "Не удалось опубликовать отложенный пост %s: %s",
+                item["id"],
+                exc,
+            )
+            item["status"] = "error"
+            item["last_error"] = str(exc)[:300]
+            item["last_attempt_at"] = now.isoformat(timespec="seconds")
+            with DATA_LOCK:
+                items = load_json_list(SCHEDULED_FILE)
+                if not any(entry.get("id") == item["id"] for entry in items):
+                    items.append(item)
+                    items.sort(key=lambda entry: entry.get("scheduled_at", ""))
+                    save_json_list(SCHEDULED_FILE, items)
+
+
+def scheduler_loop():
+    while True:
+        try:
+            publish_due_scheduled()
+        except Exception:
+            app.logger.exception("Ошибка планировщика отложенных постов")
+        time.sleep(SCHEDULER_INTERVAL)
+
+
+def ensure_scheduler():
+    global SCHEDULER_STARTED
+
+    with SCHEDULER_LOCK:
+        if SCHEDULER_STARTED:
+            return
+        SCHEDULER_STARTED = True
+
+    thread = threading.Thread(
+        target=scheduler_loop,
+        name="scheduled-posts",
+        daemon=True,
+    )
+    thread.start()
+
+
+@app.before_request
+def start_scheduler_on_request():
+    ensure_scheduler()
+
 
 
 
@@ -303,7 +472,7 @@ def build_hashtags(title, description, mood):
     return " ".join(unique_tags[:HASHTAG_LIMIT])
 
 
-def generate_with_template(title, description, price, mood_key):
+def generate_with_template(title, description, price, mood_key, product_url=""):
     mood = MOODS.get(mood_key, MOODS[DEFAULT_MOOD])
     description = clean_text(description)
 
@@ -346,17 +515,40 @@ def generate_with_template(title, description, price, mood_key):
     if price:
         blocks.append(f"💰 Цена / выгода: {trim_text(price, TEMPLATE_BENEFIT_LIMIT)}")
 
-    blocks.extend([
-        f"{mood['cta_emoji']} {mood['cta']}",
-        hashtags,
-    ])
+    blocks.append(f"{mood['cta_emoji']} {mood['cta']}")
+
+    # Ссылка на карточку товара добавляется, если пост собран по URL.
+    if product_url:
+        blocks.append(f"🔗 Подробнее: {product_url}")
+
+    blocks.append(hashtags)
     return "\n\n".join(blocks)
 
 
-def fetch_product_page(url):
-    url = url.strip()
-    if not re.match(r"^https?://", url, re.IGNORECASE):
+def normalize_url(url):
+    url = (url or "").strip()
+    if url and not re.match(r"^https?://", url, re.IGNORECASE):
         url = "https://" + url
+    return url
+
+
+def append_product_link(post, product_url):
+    """Добавляет ссылку на товар перед строкой хэштегов, если её ещё нет."""
+    if not product_url or product_url in post:
+        return post
+
+    link_line = f"🔗 Подробнее: {product_url}"
+    lines = post.rstrip().splitlines()
+
+    if lines and lines[-1].lstrip().startswith("#"):
+        hashtags = lines.pop()
+        return "\n".join(lines).rstrip() + "\n\n" + link_line + "\n\n" + hashtags
+
+    return post.rstrip() + "\n\n" + link_line
+
+
+def fetch_product_page(url):
+    url = normalize_url(url)
 
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
@@ -390,6 +582,7 @@ def fetch_product_page(url):
     return {
         "title": page_title,
         "text": combined[:8000],
+        "url": url,
     }
 
 
@@ -473,6 +666,7 @@ def index():
     }
     result = ""
     result_mode = ""
+    result_url = ""
     error = ""
     notice = ""
 
@@ -499,12 +693,14 @@ def index():
 
         page_title = ""
         page_text = ""
+        page_url = ""
 
         if mode == "ai" and form["url"]:
             try:
                 page = fetch_product_page(form["url"])
                 page_title = page["title"]
                 page_text = page["text"]
+                page_url = page["url"]
             except Exception as exc:
                 app.logger.warning("Не удалось загрузить страницу товара: %s", exc)
                 mode = "template"
@@ -523,6 +719,7 @@ def index():
                         price=form["price"],
                         mood_key=form["mood"],
                     )
+                    result = append_product_link(result, page_url)
                 except Exception as exc:
                     app.logger.warning("Ошибка генерации через ИИ: %s", exc)
                     mode = "template"
@@ -530,7 +727,11 @@ def index():
                     fallback_description = form["description"] or page_text
                     if fallback_description:
                         result = generate_with_template(
-                            form["title"], fallback_description, form["price"], form["mood"]
+                            form["title"],
+                            fallback_description,
+                            form["price"],
+                            form["mood"],
+                            product_url=page_url,
                         )
                     else:
                         error = "Добавьте описание товара"
@@ -546,6 +747,7 @@ def index():
         form["mode"] = mode
         if result:
             result_mode = mode
+            result_url = page_url
 
     return render_template(
         "index.html",
@@ -554,6 +756,7 @@ def index():
         ai_available=AI_AVAILABLE,
         result=result,
         result_mode=result_mode,
+        result_url=result_url,
         error=error,
         notice=notice,
         favorites=get_favorites(),
@@ -581,6 +784,75 @@ def api_add_favorite():
         return jsonify(ok=False, error="Не удалось сохранить избранное"), 500
 
     return jsonify(ok=True, favorite=favorite, message="Пост добавлен в избранное")
+
+
+@app.post("/api/favorites/<favorite_id>")
+def api_update_favorite(favorite_id):
+    text = request_post_text()
+    if not text:
+        return jsonify(ok=False, error="Добавьте текст поста"), 400
+
+    try:
+        favorite = update_favorite(favorite_id, text)
+    except (OSError, ValueError) as exc:
+        app.logger.warning("Не удалось обновить избранное: %s", exc)
+        return jsonify(ok=False, error="Не удалось сохранить изменения"), 500
+
+    if favorite is None:
+        return jsonify(ok=False, error="Пост не найден"), 404
+
+    return jsonify(
+        ok=True,
+        favorite=favorite,
+        text=favorite["text"],
+        message="Пост в избранном обновлён",
+    )
+
+
+@app.post("/api/favorites/<favorite_id>/publish")
+def api_publish_favorite(favorite_id):
+    text = request_post_text()
+    if not VK_AVAILABLE:
+        return jsonify(
+            ok=False,
+            error="ВКонтакте не настроен: добавьте VK_ACCESS_TOKEN и VK_GROUP_ID в .env",
+        ), 400
+
+    with DATA_LOCK:
+        items = load_json_list(FAVORITES_FILE)
+        favorite = next((item for item in items if item.get("id") == favorite_id), None)
+
+    if favorite is None:
+        return jsonify(ok=False, error="Пост не найден"), 404
+
+    if text and text != favorite.get("text"):
+        try:
+            update_favorite(favorite_id, text)
+        except (OSError, ValueError) as exc:
+            app.logger.warning("Не удалось сохранить изменения избранного: %s", exc)
+            return jsonify(ok=False, error="Не удалось сохранить изменения"), 500
+    else:
+        text = favorite.get("text", "")
+
+    if not text:
+        return jsonify(ok=False, error="Добавьте текст поста"), 400
+
+    try:
+        response = publish_to_vk(text)
+        post_id = get_post_id(response)
+    except Exception as exc:
+        app.logger.warning("Не удалось опубликовать пост из избранного: %s", exc)
+        return jsonify(
+            ok=False,
+            error="Не удалось опубликовать пост. Проверьте настройки ВКонтакте.",
+        ), 502
+
+    delete_favorite(favorite_id)
+    return jsonify(
+        ok=True,
+        post_id=post_id,
+        message="Пост опубликован и удалён из избранного",
+    )
 
 
 @app.post("/api/favorites/<favorite_id>/delete")
@@ -638,8 +910,8 @@ def api_schedule():
     data = request.get_json(silent=True) or {}
     raw_datetime = str(data.get("scheduled_at", "")).strip()
     try:
-        scheduled_dt = datetime.fromisoformat(raw_datetime).astimezone()
-    except ValueError:
+        scheduled_dt = parse_scheduled_datetime(raw_datetime)
+    except (TypeError, ValueError):
         return jsonify(ok=False, error="Укажите корректные дату и время"), 400
 
     now = datetime.now().astimezone()
@@ -649,24 +921,13 @@ def api_schedule():
             error="Выберите время не раньше чем через 10 минут",
         ), 400
 
-    timestamp = int(scheduled_dt.timestamp())
     try:
-        response = publish_to_vk(text, publish_date=timestamp)
-        post_id = get_post_id(response)
-    except Exception as exc:
-        app.logger.warning("Не удалось запланировать пост во ВКонтакте: %s", exc)
-        return jsonify(
-            ok=False,
-            error="Не удалось запланировать пост. Проверьте настройки ВКонтакте.",
-        ), 502
-
-    try:
-        item = add_scheduled(text, scheduled_dt, post_id)
+        item = add_scheduled(text, scheduled_dt)
     except OSError as exc:
         app.logger.warning("Не удалось сохранить отложенный пост: %s", exc)
         return jsonify(
             ok=False,
-            error="Пост запланирован во ВКонтакте, но не удалось сохранить scheduled.json",
+            error="Не удалось сохранить scheduled.json",
         ), 500
 
     return jsonify(
@@ -675,6 +936,124 @@ def api_schedule():
         message=f"Публикация запланирована на {item['scheduled_at_display']}",
     )
 
+
+@app.get("/api/scheduled")
+def api_get_scheduled():
+    return jsonify(ok=True, scheduled=get_scheduled())
+
+
+@app.post("/api/scheduled/<scheduled_id>")
+def api_update_scheduled(scheduled_id):
+    text = request_post_text()
+    if not text:
+        return jsonify(ok=False, error="Добавьте текст поста"), 400
+
+    with DATA_LOCK:
+        items = load_json_list(SCHEDULED_FILE)
+        item = next((entry for entry in items if entry.get("id") == scheduled_id), None)
+
+    if item is None:
+        return jsonify(ok=False, error="Отложенный пост не найден"), 404
+    if item.get("status") == "vk_scheduled":
+        return jsonify(
+            ok=False,
+            error="Этот пост уже запланирован ВКонтакте. Изменение недоступно.",
+        ), 400
+
+    try:
+        updated = update_scheduled(scheduled_id, text)
+    except (OSError, ValueError) as exc:
+        app.logger.warning("Не удалось обновить отложенный пост: %s", exc)
+        return jsonify(ok=False, error="Не удалось сохранить изменения"), 500
+
+    if updated is None:
+        return jsonify(ok=False, error="Отложенный пост не найден"), 404
+
+    return jsonify(
+        ok=True,
+        scheduled=updated,
+        text=updated["text"],
+        message="Отложенный пост обновлён",
+    )
+
+
+@app.post("/api/scheduled/<scheduled_id>/publish")
+def api_publish_scheduled_now(scheduled_id):
+    if not VK_AVAILABLE:
+        return jsonify(
+            ok=False,
+            error="ВКонтакте не настроен: добавьте VK_ACCESS_TOKEN и VK_GROUP_ID в .env",
+        ), 400
+
+    text = request_post_text()
+
+    with DATA_LOCK:
+        items = load_json_list(SCHEDULED_FILE)
+        item = next((entry for entry in items if entry.get("id") == scheduled_id), None)
+        if item is None:
+            return jsonify(ok=False, error="Отложенный пост не найден"), 404
+        if item.get("status") == "vk_scheduled":
+            return jsonify(
+                ok=False,
+                error="Этот пост уже запланирован ВКонтакте. Отмените его в управлении сообществом.",
+            ), 400
+
+        item = dict(item)
+        remaining = [entry for entry in items if entry.get("id") != scheduled_id]
+        save_json_list(SCHEDULED_FILE, remaining)
+
+    final_text = text or item.get("text", "")
+    if not final_text:
+        return jsonify(ok=False, error="Добавьте текст поста"), 400
+
+    try:
+        response = publish_to_vk(final_text)
+        post_id = get_post_id(response)
+    except Exception as exc:
+        app.logger.warning("Не удалось опубликовать отложенный пост сейчас: %s", exc)
+        item["text"] = final_text
+        item["status"] = "error"
+        item["last_error"] = str(exc)[:300]
+        item["last_attempt_at"] = datetime.now().astimezone().isoformat(timespec="seconds")
+        with DATA_LOCK:
+            items = load_json_list(SCHEDULED_FILE)
+            if not any(entry.get("id") == scheduled_id for entry in items):
+                items.append(item)
+                items.sort(key=lambda entry: entry.get("scheduled_at", ""))
+                save_json_list(SCHEDULED_FILE, items)
+
+        return jsonify(
+            ok=False,
+            error="Не удалось опубликовать пост. Проверьте настройки ВКонтакте.",
+        ), 502
+
+    return jsonify(
+        ok=True,
+        post_id=post_id,
+        message="Пост опубликован сейчас и удалён из отложенных",
+    )
+
+
+@app.post("/api/scheduled/<scheduled_id>/delete")
+def api_delete_scheduled(scheduled_id):
+    with DATA_LOCK:
+        items = load_json_list(SCHEDULED_FILE)
+        item = next((entry for entry in items if entry.get("id") == scheduled_id), None)
+
+    if item is None:
+        return jsonify(ok=False, error="Отложенный пост не найден"), 404
+
+    try:
+        delete_scheduled(scheduled_id)
+    except OSError as exc:
+        app.logger.warning("Не удалось удалить отложенный пост: %s", exc)
+        return jsonify(ok=False, error="Не удалось удалить запись"), 500
+
+    message = "Запись удалена из отложенных"
+    if item.get("status") == "vk_scheduled":
+        message += ". Не забудьте отменить публикацию в сообществе ВКонтакте."
+
+    return jsonify(ok=True, message=message)
 
 
 if __name__ == "__main__":

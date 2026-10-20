@@ -651,6 +651,28 @@ select:focus {
   box-shadow: none;
 }
 
+.product-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+  color: #c4b5fd;
+  font-size: 13px;
+  font-weight: 650;
+  text-decoration: none;
+  transition: color 0.16s ease;
+}
+
+.product-link svg {
+  width: 16px;
+  height: 16px;
+}
+
+.product-link:hover {
+  color: #fff;
+  text-decoration: underline;
+}
+
 .empty-state {
   min-height: 256px;
   display: flex;
@@ -911,6 +933,129 @@ select:focus {
   word-break: break-word;
   max-height: 220px;
   overflow: auto;
+}
+
+.saved-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.saved-actions[hidden] {
+  display: none;
+}
+
+.mini-btn {
+  padding: 7px 11px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #fff;
+  color: #4c4f66;
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 650;
+  cursor: pointer;
+  transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease;
+}
+
+.mini-btn:hover:not(:disabled) {
+  background: #f1f2fb;
+  border-color: #d7d9e8;
+}
+
+.mini-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.mini-btn--vk {
+  color: #fff;
+  background: #0077ff;
+  border-color: #0077ff;
+}
+
+.mini-btn--vk:hover:not(:disabled) {
+  background: #1b85ff;
+  border-color: #1b85ff;
+}
+
+.saved-edit-area {
+  width: 100%;
+  min-height: 130px;
+  margin: 10px 0 0;
+  padding: 12px 13px;
+  border: 1px solid #d9dced;
+  border-radius: 12px;
+  background: #fff;
+  color: #34374d;
+  font-family: inherit;
+  font-size: 13.5px;
+  line-height: 1.6;
+  resize: vertical;
+}
+
+.saved-edit-area:focus {
+  outline: none;
+  border-color: rgba(91, 92, 240, 0.65);
+  box-shadow: 0 0 0 4px rgba(91, 92, 240, 0.12);
+}
+
+.saved-edit-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 9px;
+}
+
+.saved-edit-actions .mini-btn--save {
+  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.saved-topline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.saved-topline .saved-schedule-time {
+  margin-bottom: 0;
+}
+
+.status-pill {
+  flex: none;
+  padding: 5px 9px;
+  border-radius: 999px;
+  background: #eef0fb;
+  color: #5b5cf0;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.status-pill--pending {
+  background: #e7f7ef;
+  color: #0b7d56;
+}
+
+.status-pill--error {
+  background: #fdecec;
+  color: #b43d3d;
+}
+
+.saved-note {
+  margin: 0 0 8px;
+  color: #7a7d95;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.saved-note--error {
+  color: #b43d3d;
 }
 
 .saved-footer {

@@ -159,40 +159,151 @@ if (postText) {
   postText.addEventListener("input", updateCharCount);
 }
 
-/* ── Избранное ─────────────────────────────────────────────────── */
+/* ── Избранное и отложенные: общие помощники ───────────────────── */
+
+function createActionButton(label, action, className, disabled = false, title = "") {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = className || "mini-btn";
+  button.dataset.itemAction = action;
+  button.textContent = label;
+  button.disabled = disabled;
+  if (title) button.title = title;
+  return button;
+}
+
+function buildStatusPill(item) {
+  const pill = document.createElement("span");
+  pill.className = "status-pill";
+
+  if (item.status === "error") {
+    pill.classList.add("status-pill--error");
+    pill.textContent = "Ошибка";
+  } else if (item.status === "vk_scheduled") {
+    pill.textContent = "ВКонтакте";
+  } else {
+    pill.classList.add("status-pill--pending");
+    pill.textContent = "Ожидает";
+  }
+  return pill;
+}
+
+function buildScheduledTime(item) {
+  const time = document.createElement("div");
+  time.className = "saved-schedule-time";
+  time.innerHTML =
+    '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true">' +
+    '<circle cx="12" cy="12" r="8.5" stroke="currentColor" stroke-width="1.7"/>' +
+    '<path d="M12 7.5V12l3 2" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>' +
+    "</svg>";
+  time.append(document.createTextNode(item.scheduled_at_display || ""));
+  return time;
+}
 
 function buildFavoriteCard(favorite) {
   const article = document.createElement("article");
   article.className = "saved-item";
-  article.dataset.favoriteId = favorite.id;
+  article.dataset.itemKind = "favorite";
+  article.dataset.itemId = favorite.id;
 
   const text = document.createElement("p");
   text.className = "saved-text";
   text.textContent = favorite.text;
 
+  const actions = document.createElement("div");
+  actions.className = "saved-actions";
+  actions.append(
+    createActionButton("Редактировать", "edit", "mini-btn"),
+    createActionButton("Опубликовать", "publish", "mini-btn mini-btn--vk"),
+    createActionButton("Удалить", "delete", "link-btn")
+  );
+
   const footer = document.createElement("div");
   footer.className = "saved-footer";
-
   const date = document.createElement("span");
   date.textContent = favorite.created_at_display || "";
+  footer.append(date);
 
-  const button = document.createElement("button");
-  button.type = "button";
-  button.className = "link-btn";
-  button.dataset.deleteFavorite = favorite.id;
-  button.textContent = "Удалить";
+  article.append(text, actions, footer);
+  return article;
+}
 
-  footer.append(date, button);
-  article.append(text, footer);
+function buildScheduledCard(item) {
+  const article = document.createElement("article");
+  article.className = "saved-item saved-item--scheduled";
+  article.dataset.itemKind = "scheduled";
+  article.dataset.itemId = item.id;
+  article.dataset.scheduledAt = item.scheduled_at || "";
+  article.dataset.status = item.status || "pending";
+
+  const topline = document.createElement("div");
+  topline.className = "saved-topline";
+  topline.append(buildScheduledTime(item), buildStatusPill(item));
+
+  const isLegacy = item.status === "vk_scheduled";
+  const disabledTitle = isLegacy ? "Пост уже запланирован ВКонтакте" : "";
+
+  const actions = document.createElement("div");
+  actions.className = "saved-actions";
+  actions.append(
+    createActionButton("Редактировать", "edit", "mini-btn", isLegacy, disabledTitle),
+    createActionButton("Опубликовать сейчас", "publish", "mini-btn mini-btn--vk", isLegacy, disabledTitle),
+    createActionButton("Удалить", "delete", "link-btn")
+  );
+
+  article.append(topline);
+
+  if (item.status === "error") {
+    const note = document.createElement("p");
+    note.className = "saved-note saved-note--error";
+    note.textContent = "Не удалось опубликовать. Попробуйте «Опубликовать сейчас».";
+    article.append(note);
+  } else if (isLegacy) {
+    const note = document.createElement("p");
+    note.className = "saved-note";
+    note.textContent = "Пост запланирован на стороне ВКонтакте.";
+    article.append(note);
+  }
+
+  const text = document.createElement("p");
+  text.className = "saved-text";
+  text.textContent = item.text;
+
+  article.append(text, actions);
   return article;
 }
 
 function updateFavoritesState() {
   if (!favoritesList) return;
-  const count = favoritesList.querySelectorAll("[data-favorite-id]").length;
+  const count = favoritesList.querySelectorAll('[data-item-kind="favorite"]').length;
   if (favoritesCount) favoritesCount.textContent = count;
   if (favoritesEmpty) favoritesEmpty.hidden = count > 0;
 }
+
+function updateScheduledState() {
+  if (!scheduledList) return;
+  const count = scheduledList.querySelectorAll('[data-item-kind="scheduled"]').length;
+  if (scheduledCount) scheduledCount.textContent = count;
+  if (scheduledEmpty) scheduledEmpty.hidden = count > 0;
+}
+
+function sortScheduledList() {
+  if (!scheduledList) return;
+  const cards = Array.from(scheduledList.querySelectorAll('[data-item-kind="scheduled"]'));
+  cards.sort((a, b) =>
+    (a.dataset.scheduledAt || "").localeCompare(b.dataset.scheduledAt || "")
+  );
+  cards.forEach((card) => scheduledList.append(card));
+}
+
+function renderScheduledList(items) {
+  if (!scheduledList) return;
+  scheduledList.innerHTML = "";
+  items.forEach((item) => scheduledList.append(buildScheduledCard(item)));
+  updateScheduledState();
+}
+
+/* ── Избранное: добавление ─────────────────────────────────────── */
 
 if (favoriteBtn) {
   favoriteBtn.addEventListener("click", async () => {
@@ -218,31 +329,170 @@ if (favoriteBtn) {
   });
 }
 
-if (favoritesList) {
-  favoritesList.addEventListener("click", async (event) => {
-    const button = event.target.closest("[data-delete-favorite]");
-    if (!button) return;
+/* ── Редактирование сохранённых постов ─────────────────────────── */
 
-    const favoriteId = button.dataset.deleteFavorite;
-    const card = button.closest(".saved-item");
-    button.disabled = true;
+function getCardText(card) {
+  const editArea = card.querySelector(".saved-edit-area");
+  if (editArea) return editArea.value.trim();
 
-    try {
-      await postJson(
-        "/api/favorites/" + encodeURIComponent(favoriteId) + "/delete",
-        {}
-      );
-      if (card) card.remove();
-      updateFavoritesState();
-      setActionStatus("Пост удалён из избранного");
-    } catch (error) {
-      button.disabled = false;
-      setActionStatus(error.message, true);
-    }
-  });
+  const textElement = card.querySelector(".saved-text");
+  return textElement ? textElement.textContent.trim() : "";
 }
 
-/* ── Публикация и отложенные посты ─────────────────────────────── */
+function startItemEdit(card) {
+  if (!card || card.dataset.editing === "true") return;
+
+  const textElement = card.querySelector(".saved-text");
+  const actions = card.querySelector(".saved-actions");
+  if (!textElement || !actions) return;
+
+  const textarea = document.createElement("textarea");
+  textarea.className = "saved-edit-area";
+  textarea.value = textElement.textContent;
+  textElement.hidden = true;
+  actions.hidden = true;
+
+  const editActions = document.createElement("div");
+  editActions.className = "saved-edit-actions";
+  editActions.append(
+    createActionButton("Сохранить", "save", "mini-btn mini-btn--save"),
+    createActionButton("Отмена", "cancel", "mini-btn")
+  );
+
+  card.insertBefore(textarea, actions);
+  card.insertBefore(editActions, actions);
+  card.dataset.editing = "true";
+  textarea.focus();
+}
+
+function stopItemEdit(card) {
+  if (!card) return;
+
+  const textarea = card.querySelector(".saved-edit-area");
+  if (textarea) textarea.remove();
+
+  const editActions = card.querySelector(".saved-edit-actions");
+  if (editActions) editActions.remove();
+
+  const textElement = card.querySelector(".saved-text");
+  if (textElement) textElement.hidden = false;
+
+  const actions = card.querySelector(".saved-actions");
+  if (actions) actions.hidden = false;
+
+  delete card.dataset.editing;
+}
+
+async function saveItemEdit(card) {
+  const kind = card.dataset.itemKind;
+  const itemId = card.dataset.itemId;
+  const text = getCardText(card);
+
+  if (!text) {
+    setActionStatus("Добавьте текст поста", true);
+    return;
+  }
+
+  const saveButton = card.querySelector('[data-item-action="save"]');
+  if (saveButton) saveButton.disabled = true;
+
+  const endpoint =
+    kind === "favorite"
+      ? "/api/favorites/" + encodeURIComponent(itemId)
+      : "/api/scheduled/" + encodeURIComponent(itemId);
+
+  try {
+    const data = await postJson(endpoint, { text });
+    const textElement = card.querySelector(".saved-text");
+    if (textElement) textElement.textContent = data.text || text;
+    stopItemEdit(card);
+    setActionStatus(data.message || "Изменения сохранены");
+  } catch (error) {
+    if (saveButton) saveButton.disabled = false;
+    setActionStatus(error.message, true);
+  }
+}
+
+/* ── Публикация и удаление сохранённых постов ──────────────────── */
+
+async function publishSavedItem(card) {
+  const kind = card.dataset.itemKind;
+  const itemId = card.dataset.itemId;
+  const text = getCardText(card);
+
+  if (!text) {
+    setActionStatus("Добавьте текст поста", true);
+    return;
+  }
+
+  const button = card.querySelector('[data-item-action="publish"]');
+  if (button) button.disabled = true;
+
+  const endpoint =
+    kind === "favorite"
+      ? "/api/favorites/" + encodeURIComponent(itemId) + "/publish"
+      : "/api/scheduled/" + encodeURIComponent(itemId) + "/publish";
+
+  try {
+    const data = await postJson(endpoint, { text });
+    card.remove();
+    if (kind === "favorite") {
+      updateFavoritesState();
+    } else {
+      updateScheduledState();
+    }
+    setActionStatus(data.message || "Пост опубликован");
+  } catch (error) {
+    if (button) button.disabled = false;
+    setActionStatus(error.message, true);
+  }
+}
+
+async function deleteSavedItem(card) {
+  const kind = card.dataset.itemKind;
+  const itemId = card.dataset.itemId;
+  const button = card.querySelector('[data-item-action="delete"]');
+  if (button) button.disabled = true;
+
+  const endpoint =
+    kind === "favorite"
+      ? "/api/favorites/" + encodeURIComponent(itemId) + "/delete"
+      : "/api/scheduled/" + encodeURIComponent(itemId) + "/delete";
+
+  try {
+    const data = await postJson(endpoint, {});
+    card.remove();
+    if (kind === "favorite") {
+      updateFavoritesState();
+    } else {
+      updateScheduledState();
+    }
+    setActionStatus(data.message || "Удалено");
+  } catch (error) {
+    if (button) button.disabled = false;
+    setActionStatus(error.message, true);
+  }
+}
+
+function handleSavedAction(event) {
+  const button = event.target.closest("[data-item-action]");
+  if (!button || button.disabled) return;
+
+  const card = button.closest("[data-item-kind]");
+  if (!card) return;
+
+  const action = button.dataset.itemAction;
+  if (action === "edit") startItemEdit(card);
+  if (action === "cancel") stopItemEdit(card);
+  if (action === "save") saveItemEdit(card);
+  if (action === "publish") publishSavedItem(card);
+  if (action === "delete") deleteSavedItem(card);
+}
+
+if (favoritesList) favoritesList.addEventListener("click", handleSavedAction);
+if (scheduledList) scheduledList.addEventListener("click", handleSavedAction);
+
+/* ── Планирование публикации ───────────────────────────────────── */
 
 if (publishBtn) {
   publishBtn.addEventListener("click", async () => {
@@ -312,45 +562,6 @@ if (scheduleCancelBtn && schedulePanel) {
   });
 }
 
-function buildScheduledCard(item) {
-  const article = document.createElement("article");
-  article.className = "saved-item saved-item--scheduled";
-  article.dataset.scheduledId = item.id;
-  article.dataset.scheduledAt = item.scheduled_at || "";
-
-  const time = document.createElement("div");
-  time.className = "saved-schedule-time";
-  time.innerHTML =
-    '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true">' +
-    '<circle cx="12" cy="12" r="8.5" stroke="currentColor" stroke-width="1.7"/>' +
-    '<path d="M12 7.5V12l3 2" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>' +
-    "</svg>";
-  time.append(document.createTextNode(item.scheduled_at_display || ""));
-
-  const text = document.createElement("p");
-  text.className = "saved-text";
-  text.textContent = item.text;
-
-  article.append(time, text);
-  return article;
-}
-
-function sortScheduledList() {
-  if (!scheduledList) return;
-  const cards = Array.from(scheduledList.querySelectorAll("[data-scheduled-id]"));
-  cards.sort((a, b) =>
-    (a.dataset.scheduledAt || "").localeCompare(b.dataset.scheduledAt || "")
-  );
-  cards.forEach((card) => scheduledList.append(card));
-}
-
-function updateScheduledState() {
-  if (!scheduledList) return;
-  const count = scheduledList.querySelectorAll("[data-scheduled-id]").length;
-  if (scheduledCount) scheduledCount.textContent = count;
-  if (scheduledEmpty) scheduledEmpty.hidden = count > 0;
-}
-
 if (scheduleBtn) {
   scheduleBtn.addEventListener("click", async () => {
     const text = getCurrentText();
@@ -385,7 +596,27 @@ if (scheduleBtn) {
   });
 }
 
+/* ── Автообновление отложенных ─────────────────────────────────── */
+
+async function refreshScheduled() {
+  if (!scheduledList) return;
+  if (scheduledList.querySelector('[data-editing="true"]')) return;
+
+  try {
+    const response = await fetch("/api/scheduled");
+    if (!response.ok) return;
+
+    const data = await response.json();
+    if (!data.ok || !Array.isArray(data.scheduled)) return;
+
+    renderScheduledList(data.scheduled);
+  } catch (error) {
+    // Тихо пропускаем: обновим при следующей попытке.
+  }
+}
+
 syncMode();
 updateCharCount();
 updateFavoritesState();
 updateScheduledState();
+setInterval(refreshScheduled, 20000);
