@@ -84,7 +84,8 @@ TEMPLATE_LEAD_LIMIT = 420
 TEMPLATE_BENEFIT_LIMIT = 160
 TEMPLATE_MAX_BENEFITS = 3
 
-# Количество эмодзи: в шаблоне их два — в заголовке и перед CTA.
+# Количество эмодзи: в шаблоне их два — в заголовке и перед CTA,
+# плюс 💰 для строки с ценой, если поле заполнено.
 # Хотите меньше — уберите emoji / cta_emoji в настройках настроений.
 
 # Хэштеги: максимум штук и общие хэштеги в конце.
@@ -183,8 +184,6 @@ def generate_with_template(title, description, price, mood_key):
     if not benefits:
         benefits.append("Практичное решение, которое приятно использовать каждый день")
 
-    if price:
-        benefits.append("Выгода: " + trim_text(price, TEMPLATE_BENEFIT_LIMIT))
     benefits = benefits[:TEMPLATE_MAX_BENEFITS]
 
     benefits_text = "\n".join("• " + item for item in benefits)
@@ -194,9 +193,16 @@ def generate_with_template(title, description, price, mood_key):
         f"{mood['emoji']} {headline}",
         f"{mood['hook']} {lead}",
         "Польза для вас:\n" + benefits_text,
+    ]
+
+    # Цена или выгода — отдельной строкой, если поле заполнено.
+    if price:
+        blocks.append(f"💰 Цена / выгода: {trim_text(price, TEMPLATE_BENEFIT_LIMIT)}")
+
+    blocks.extend([
         f"{mood['cta_emoji']} {mood['cta']}",
         hashtags,
-    ]
+    ])
     return "\n\n".join(blocks)
 
 
@@ -260,10 +266,12 @@ def generate_with_ai(title, description, page_title, page_text, price, mood_key)
         "1. Заголовок с одним эмодзи.\n"
         "2. Основной текст: 2–4 коротких предложения.\n"
         "3. Блок «Польза для вас:» с 2–3 пунктами через «•».\n"
-        "4. Призыв к действию с одним эмодзи.\n"
-        "5. 4–5 хэштегов в одну строку.\n\n"
+        "4. Если указана цена или выгода — отдельная строка «💰 Цена / выгода: …».\n"
+        "5. Призыв к действию с одним эмодзи.\n"
+        "6. 4–5 хэштегов в одну строку.\n\n"
         "Верни только готовый текст поста. Без markdown-заголовков, пояснений, "
-        "кавычек и вступлений. Не выдумывай характеристики товара."
+        "кавычек и вступлений. Не выдумывай характеристики товара и не придумывай "
+        "цену, если она не указана."
     )
 
     source_parts = []
@@ -281,7 +289,10 @@ def generate_with_ai(title, description, page_title, page_text, price, mood_key)
         source_parts.append("Описание товара:\n" + description)
 
     if price:
-        source_parts.append("Цена или выгода: " + price)
+        source_parts.append(
+            "Цена или выгода (обязательно добавь в пост отдельной строкой «💰 Цена / выгода: …»): "
+            + price
+        )
 
     source_parts.append("Настроение поста: " + mood["label"])
     source_parts.append("Сформируй пост по структуре и настройкам стиля.")
