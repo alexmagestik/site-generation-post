@@ -1,13 +1,26 @@
+import asyncio
+import json
 import os
 import re
+import threading
+import uuid
+from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlparse
+
+import certifi
+
+# На macOS у aiohttp/vkbottle иногда нет доступа к системным сертификатам.
+# Поэтому подключаем сертификаты из certifi до импорта сетевых библиотек.
+os.environ.setdefault("SSL_CERT_FILE", certifi.where())
+os.environ.setdefault("REQUESTS_CA_BUNDLE", certifi.where())
 
 import requests
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
-from flask import Flask, render_template, request
+from flask import Flask, jsonify, render_template, request
 from openai import OpenAI
+from vkbottle import API
 
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
@@ -17,6 +30,19 @@ app = Flask(__name__)
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip()
 AI_AVAILABLE = bool(OPENAI_API_KEY)
+
+VK_ACCESS_TOKEN = os.getenv("VK_ACCESS_TOKEN", "").strip()
+try:
+    VK_GROUP_ID = abs(int(os.getenv("VK_GROUP_ID", "0").strip() or 0))
+except ValueError:
+    VK_GROUP_ID = 0
+VK_AVAILABLE = bool(VK_ACCESS_TOKEN and VK_GROUP_ID)
+
+# Локальное хранение избранного и отложенных публикаций (без базы данных).
+FAVORITES_FILE = BASE_DIR / "favorites.json"
+SCHEDULED_FILE = BASE_DIR / "scheduled.json"
+DATA_LOCK = threading.Lock()
+
 
 # ══════════════════════════════════════════════════════════════════════
 #  НАСТРОЙКИ СТИЛЯ ГЕНЕРАТОРА
@@ -118,6 +144,127 @@ def default_mode():
 
 def clean_text(text):
     return " ".join((text or "").split()).strip()
+
+
+def format_datetime(value):
+    try:
+        return datetime.fromisoformat(value).astimezone().strftime("%d.%m.%Y, %H:%M")
+    except (TypeError, ValueError):
+        return value or ""
+
+
+def load_json_list(path):
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    return data if isinstance(data, list) else []
+
+
+def save_json_list(path, items):
+    # Пишем во временный файл, чтобы не повредить данные при сбое.
+    temp_path = path.with_suffix(path.suffix + ".tmp")
+    temp_path.write_text(
+        json.dumps(items, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    temp_path.replace(path)
+
+
+def get_favorites():
+    with DATA_LOCK:
+        items = load_json_list(FAVORITES_FILE)
+    for item in items:
+        item["created_at_display"] = format_datetime(item.get("created_at"))
+    return items
+
+
+def add_favorite(text):
+    text = (text or "").strip()
+    if not text:
+        raise ValueError("Пост пуст")
+
+    item = {
+        "id": uuid.uuid4().hex,
+        "text": text,
+        "created_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+    }
+
+    with DATA_LOCK:
+        items = load_json_list(FAVORITES_FILE)
+        items.insert(0, item)
+        save_json_list(FAVORITES_FILE, items)
+
+    item["created_at_display"] = format_datetime(item["created_at"])
+    return item
+
+
+def delete_favorite(favorite_id):
+    with DATA_LOCK:
+        items = load_json_list(FAVORITES_FILE)
+        remaining = [item for item in items if item.get("id") != favorite_id]
+        if len(remaining) == len(items):
+            return False
+        save_json_list(FAVORITES_FILE, remaining)
+    return True
+
+
+def get_scheduled():
+    with DATA_LOCK:
+        items = load_json_list(SCHEDULED_FILE)
+    items.sort(key=lambda item: item.get("scheduled_at", ""))
+    for item in items:
+        item["scheduled_at_display"] = format_datetime(item.get("scheduled_at"))
+    return items
+
+
+def add_scheduled(text, scheduled_dt, post_id=None):
+    item = {
+        "id": uuid.uuid4().hex,
+        "text": text,
+        "scheduled_at": scheduled_dt.isoformat(timespec="seconds"),
+        "created_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "post_id": post_id,
+    }
+
+    with DATA_LOCK:
+        items = load_json_list(SCHEDULED_FILE)
+        items.append(item)
+        items.sort(key=lambda entry: entry.get("scheduled_at", ""))
+        save_json_list(SCHEDULED_FILE, items)
+
+    item["scheduled_at_display"] = format_datetime(item["scheduled_at"])
+    return item
+
+
+def publish_to_vk(text, publish_date=None):
+    """Публикует или планирует пост на стене сообщества через vkbottle."""
+    if not VK_AVAILABLE:
+        raise RuntimeError("ВКонтакте не настроен")
+
+    async def _publish():
+        api = API(VK_ACCESS_TOKEN)
+        try:
+            params = {
+                "owner_id": -VK_GROUP_ID,
+                "from_group": True,
+                "message": text,
+            }
+            if publish_date is not None:
+                params["publish_date"] = publish_date
+            return await api.wall.post(**params)
+        finally:
+            await api.http_client.close()
+
+    return asyncio.run(_publish())
+
+
+def get_post_id(response):
+    post_id = getattr(response, "post_id", None)
+    if post_id is None and isinstance(response, dict):
+        post_id = response.get("post_id")
+    return post_id
+
 
 
 def trim_text(text, limit):
@@ -409,7 +556,125 @@ def index():
         result_mode=result_mode,
         error=error,
         notice=notice,
+        favorites=get_favorites(),
+        scheduled=get_scheduled(),
+        vk_available=VK_AVAILABLE,
+        vk_group_id=VK_GROUP_ID,
     )
+
+
+def request_post_text():
+    data = request.get_json(silent=True) or {}
+    return str(data.get("text", "")).strip()
+
+
+@app.post("/api/favorites")
+def api_add_favorite():
+    text = request_post_text()
+    if not text:
+        return jsonify(ok=False, error="Добавьте текст поста"), 400
+
+    try:
+        favorite = add_favorite(text)
+    except (OSError, ValueError) as exc:
+        app.logger.warning("Не удалось сохранить избранное: %s", exc)
+        return jsonify(ok=False, error="Не удалось сохранить избранное"), 500
+
+    return jsonify(ok=True, favorite=favorite, message="Пост добавлен в избранное")
+
+
+@app.post("/api/favorites/<favorite_id>/delete")
+def api_delete_favorite(favorite_id):
+    try:
+        deleted = delete_favorite(favorite_id)
+    except OSError as exc:
+        app.logger.warning("Не удалось удалить избранное: %s", exc)
+        return jsonify(ok=False, error="Не удалось удалить пост"), 500
+
+    if not deleted:
+        return jsonify(ok=False, error="Пост не найден"), 404
+    return jsonify(ok=True, message="Пост удалён из избранного")
+
+
+@app.post("/api/publish")
+def api_publish():
+    text = request_post_text()
+    if not text:
+        return jsonify(ok=False, error="Добавьте текст поста"), 400
+    if not VK_AVAILABLE:
+        return jsonify(
+            ok=False,
+            error="ВКонтакте не настроен: добавьте VK_ACCESS_TOKEN и VK_GROUP_ID в .env",
+        ), 400
+
+    try:
+        response = publish_to_vk(text)
+        post_id = get_post_id(response)
+    except Exception as exc:
+        app.logger.warning("Не удалось опубликовать пост во ВКонтакте: %s", exc)
+        return jsonify(
+            ok=False,
+            error="Не удалось опубликовать пост. Проверьте VK_ACCESS_TOKEN и VK_GROUP_ID.",
+        ), 502
+
+    return jsonify(
+        ok=True,
+        post_id=post_id,
+        message="Пост опубликован во ВКонтакте",
+    )
+
+
+@app.post("/api/schedule")
+def api_schedule():
+    text = request_post_text()
+    if not text:
+        return jsonify(ok=False, error="Добавьте текст поста"), 400
+    if not VK_AVAILABLE:
+        return jsonify(
+            ok=False,
+            error="ВКонтакте не настроен: добавьте VK_ACCESS_TOKEN и VK_GROUP_ID в .env",
+        ), 400
+
+    data = request.get_json(silent=True) or {}
+    raw_datetime = str(data.get("scheduled_at", "")).strip()
+    try:
+        scheduled_dt = datetime.fromisoformat(raw_datetime).astimezone()
+    except ValueError:
+        return jsonify(ok=False, error="Укажите корректные дату и время"), 400
+
+    now = datetime.now().astimezone()
+    if scheduled_dt < now + timedelta(minutes=10):
+        return jsonify(
+            ok=False,
+            error="Выберите время не раньше чем через 10 минут",
+        ), 400
+
+    timestamp = int(scheduled_dt.timestamp())
+    try:
+        response = publish_to_vk(text, publish_date=timestamp)
+        post_id = get_post_id(response)
+    except Exception as exc:
+        app.logger.warning("Не удалось запланировать пост во ВКонтакте: %s", exc)
+        return jsonify(
+            ok=False,
+            error="Не удалось запланировать пост. Проверьте настройки ВКонтакте.",
+        ), 502
+
+    try:
+        item = add_scheduled(text, scheduled_dt, post_id)
+    except OSError as exc:
+        app.logger.warning("Не удалось сохранить отложенный пост: %s", exc)
+        return jsonify(
+            ok=False,
+            error="Пост запланирован во ВКонтакте, но не удалось сохранить scheduled.json",
+        ), 500
+
+    return jsonify(
+        ok=True,
+        scheduled=item,
+        message=f"Публикация запланирована на {item['scheduled_at_display']}",
+    )
+
 
 
 if __name__ == "__main__":

@@ -187,7 +187,12 @@
 
         <div class="result-body">
           {% if result %}
-            <pre class="post-text" id="postText">{{ result }}</pre>
+            <div class="result-toolbar">
+              <span>Текст можно редактировать</span>
+              <span class="char-count" id="charCount"></span>
+            </div>
+            <textarea class="post-text" id="postText" rows="15"
+                      aria-label="Готовый пост — можно редактировать">{{ result }}</textarea>
           {% else %}
             <div class="empty-state">
               <span class="empty-icon">
@@ -212,11 +217,112 @@
           </button>
           <span class="copy-status" id="copyStatus" role="status" aria-live="polite"></span>
         </div>
+
+        <div class="post-actions">
+          <button type="button" class="btn btn--action" id="favoriteBtn" {% if not result %}disabled{% endif %}>
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M7 4h10a2 2 0 0 1 2 2v14l-7-3-7 3V6a2 2 0 0 1 2-2Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+            </svg>
+            <span>В избранное</span>
+          </button>
+
+          <button type="button" class="btn btn--action btn--publish" id="publishBtn"
+                  {% if not result or not vk_available %}disabled{% endif %}>
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M21 3 10 14M21 3l-7 18-4-7-7-4 18-7Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+            </svg>
+            <span>Опубликовать</span>
+          </button>
+
+          <button type="button" class="btn btn--action" id="scheduleToggleBtn"
+                  {% if not result or not vk_available %}disabled{% endif %}>
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <circle cx="12" cy="12" r="8.5" stroke="currentColor" stroke-width="1.7"/>
+              <path d="M12 7.5V12l3 2" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            <span>Отложить</span>
+          </button>
+        </div>
+
+        {% if not vk_available %}
+          <p class="hint hint--dark">
+            Для публикации добавьте <code>VK_ACCESS_TOKEN</code> и <code>VK_GROUP_ID</code> в <code>.env</code>.
+          </p>
+        {% endif %}
+
+        <div class="schedule-panel" id="schedulePanel" hidden>
+          <label for="scheduleAt">Дата и время публикации</label>
+          <input type="datetime-local" id="scheduleAt">
+          <div class="schedule-row">
+            <button type="button" class="btn btn--schedule" id="scheduleBtn">Запланировать</button>
+            <button type="button" class="btn btn--ghost" id="scheduleCancelBtn">Отмена</button>
+          </div>
+          <p class="hint hint--dark">По умолчанию +1 час. Минимум +10 минут.</p>
+        </div>
+
+        <div class="action-status" id="actionStatus" role="status" aria-live="polite"></div>
       </section>
     </section>
 
+    <section class="library" aria-label="Избранное и отложенные посты">
+      <div class="library-grid">
+        <section class="card library-card">
+          <div class="card-head">
+            <div>
+              <span class="card-kicker">Коллекция</span>
+              <h2>Избранное</h2>
+            </div>
+            <span class="count-badge" id="favoritesCount">{{ favorites|length }}</span>
+          </div>
+
+          <div class="saved-list" id="favoritesList">
+            {% for favorite in favorites %}
+              <article class="saved-item" data-favorite-id="{{ favorite.id }}">
+                <p class="saved-text">{{ favorite.text }}</p>
+                <div class="saved-footer">
+                  <span>{{ favorite.created_at_display }}</span>
+                  <button type="button" class="link-btn" data-delete-favorite="{{ favorite.id }}">Удалить</button>
+                </div>
+              </article>
+            {% endfor %}
+          </div>
+          <p class="library-empty" id="favoritesEmpty" {% if favorites %}hidden{% endif %}>
+            Пока пусто. Сгенерируйте пост и добавьте его в избранное.
+          </p>
+        </section>
+
+        <section class="card library-card">
+          <div class="card-head">
+            <div>
+              <span class="card-kicker">ВКонтакте</span>
+              <h2>Отложенные</h2>
+            </div>
+            <span class="count-badge" id="scheduledCount">{{ scheduled|length }}</span>
+          </div>
+
+          <div class="saved-list" id="scheduledList">
+            {% for item in scheduled %}
+              <article class="saved-item saved-item--scheduled" data-scheduled-id="{{ item.id }}" data-scheduled-at="{{ item.scheduled_at }}">
+                <div class="saved-schedule-time">
+                  <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <circle cx="12" cy="12" r="8.5" stroke="currentColor" stroke-width="1.7"/>
+                    <path d="M12 7.5V12l3 2" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                  {{ item.scheduled_at_display }}
+                </div>
+                <p class="saved-text">{{ item.text }}</p>
+              </article>
+            {% endfor %}
+          </div>
+          <p class="library-empty" id="scheduledEmpty" {% if scheduled %}hidden{% endif %}>
+            Здесь появятся посты, запланированные через ВКонтакте.
+          </p>
+        </section>
+      </div>
+    </section>
+
     <footer class="footer">
-      Стиль постов настраивается в <code>voice.md</code> · ключ и модель — в <code>.env</code>
+      Стиль постов настраивается в <code>voice.md</code> · ключи — в <code>.env</code>
     </footer>
   </main>
 
