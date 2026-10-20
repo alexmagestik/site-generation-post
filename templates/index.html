@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Постмастер — генератор постов для товаров</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <div class="background-orb background-orb--violet" aria-hidden="true"></div>
+  <div class="background-orb background-orb--peach" aria-hidden="true"></div>
+
+  <header class="topbar">
+    <a class="brand" href="{{ url_for('index') }}">
+      <span class="brand-mark">П</span>
+      <span class="brand-name">Постмастер</span>
+    </a>
+    <span class="topbar-note">Генератор постов для товаров</span>
+  </header>
+
+  <main class="container">
+    <section class="hero">
+      <div class="hero-copy">
+        <span class="eyebrow"><span class="eyebrow-dot"></span> Копирайтер в кармане</span>
+        <h1>Товар, который<br><span class="gradient-text">хочется купить</span></h1>
+        <p class="hero-lead">
+          Заполните пару полей — получите готовый пост с заголовком, пользой,
+          призывом к действию и хэштегами.
+        </p>
+        <div class="hero-chips" aria-label="Что будет в посте">
+          <span>Заголовок</span>
+          <span>Эмодзи</span>
+          <span>Польза</span>
+          <span>CTA</span>
+          <span>Хэштеги</span>
+        </div>
+      </div>
+
+      <aside class="structure-card" aria-label="Структура поста">
+        <div class="structure-head">
+          <span class="structure-title">Что внутри</span>
+          <span class="structure-badge">6 блоков</span>
+        </div>
+        <ol class="structure-list">
+          <li>
+            <span class="structure-num">01</span>
+            <span><strong>Заголовок</strong><small>цепляет с первой строки</small></span>
+          </li>
+          <li>
+            <span class="structure-num">02</span>
+            <span><strong>Живой текст</strong><small>без воды и канцелярита</small></span>
+          </li>
+          <li>
+            <span class="structure-num">03</span>
+            <span><strong>Польза</strong><small>что получит покупатель</small></span>
+          </li>
+          <li>
+            <span class="structure-num">04</span>
+            <span><strong>CTA</strong><small>понятный следующий шаг</small></span>
+          </li>
+          <li>
+            <span class="structure-num">05</span>
+            <span><strong>Хэштеги</strong><small>для охвата и поиска</small></span>
+          </li>
+          <li>
+            <span class="structure-num">06</span>
+            <span><strong>Эмодзи</strong><small>аккуратные акценты</small></span>
+          </li>
+        </ol>
+      </aside>
+    </section>
+
+    <section class="workspace">
+      <form method="post" class="card form-card" id="postForm" novalidate>
+        <div class="card-head">
+          <div>
+            <span class="card-kicker">Шаг 1</span>
+            <h2>О товаре</h2>
+          </div>
+
+          <div class="mode-switch" role="group" aria-label="Режим генерации">
+            <input type="radio" name="mode" value="ai" id="mode-ai"
+                   {% if form.mode == 'ai' %}checked{% endif %}
+                   {% if not ai_available %}disabled{% endif %}>
+            <label for="mode-ai" {% if not ai_available %}title="Добавьте OPENAI_API_KEY в .env"{% endif %}>Через ИИ</label>
+
+            <input type="radio" name="mode" value="template" id="mode-template"
+                   {% if form.mode != 'ai' %}checked{% endif %}>
+            <label for="mode-template">По шаблону</label>
+          </div>
+        </div>
+
+        {% if not ai_available %}
+          <p class="hint hint--warn">
+            Режим ИИ выключен. Добавьте <code>OPENAI_API_KEY</code> и <code>OPENAI_MODEL</code> в файл <code>.env</code>.
+          </p>
+        {% endif %}
+
+        <div class="field" id="urlField">
+          <label for="url">URL страницы товара <span class="label-note">необязательно</span></label>
+          <div class="input-wrap">
+            <svg class="input-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M10 13a5 5 0 0 0 7.54.54l2-2a5 5 0 0 0-7.07-7.07l-1.14 1.14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+              <path d="M14 11a5 5 0 0 0-7.54-.54l-2 2a5 5 0 0 0 7.07 7.07l1.14-1.14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+            </svg>
+            <input type="url" id="url" name="url" value="{{ form.url }}"
+                   placeholder="https://example.com/product" autocomplete="url">
+          </div>
+          <p class="hint" id="urlHint">В режиме ИИ описание автоматически возьмём со страницы товара.</p>
+        </div>
+
+        <div class="field">
+          <label for="title">Название товара</label>
+          <input type="text" id="title" name="title" value="{{ form.title }}"
+                 placeholder="Например, беспроводные наушники AirBeat" autocomplete="off">
+        </div>
+
+        <div class="field">
+          <label for="description">Описание товара <span class="label-note" id="descriptionNote">обязательно, если нет URL</span></label>
+          <textarea id="description" name="description" rows="5"
+                    placeholder="Расскажите, что это за товар, для кого он и чем полезен">{{ form.description }}</textarea>
+        </div>
+
+        <div class="field-row">
+          <div class="field">
+            <label for="price">Цена или выгода <span class="label-note">необязательно</span></label>
+            <input type="text" id="price" name="price" value="{{ form.price }}"
+                   placeholder="2 990 ₽ или скидка 20%" autocomplete="off">
+          </div>
+
+          <div class="field">
+            <label for="mood">Настроение поста</label>
+            <div class="select-wrap">
+              <select id="mood" name="mood">
+                {% for key, mood in moods.items() %}
+                  <option value="{{ key }}" {% if form.mood == key %}selected{% endif %}>{{ mood.label }}</option>
+                {% endfor %}
+              </select>
+              <svg class="select-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path d="m7 10 5 5 5-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </div>
+          </div>
+        </div>
+
+        <button type="submit" class="btn btn--generate" id="generateBtn">
+          <svg class="btn-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M12 3l1.7 5.3L19 10l-5.3 1.7L12 17l-1.7-5.3L5 10l5.3-1.7L12 3Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+            <path d="M19 15l.7 2.3L22 18l-2.3.7L19 21l-.7-2.3L16 18l2.3-.7L19 15Z" fill="currentColor"/>
+          </svg>
+          <span class="btn-label">Сформировать пост</span>
+        </button>
+
+        {% if error %}
+          <div class="alert alert--error" role="alert">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.8"/>
+              <path d="M12 8v4.5M12 16h.01" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+            </svg>
+            {{ error }}
+          </div>
+        {% endif %}
+
+        {% if notice %}
+          <div class="alert alert--info" role="status">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.8"/>
+              <path d="M12 11v5M12 8h.01" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+            </svg>
+            {{ notice }}
+          </div>
+        {% endif %}
+      </form>
+
+      <section class="card result-card" id="resultCard" aria-label="Готовый пост">
+        <div class="card-head result-head">
+          <div>
+            <span class="card-kicker">Шаг 2</span>
+            <h2>Готовый пост</h2>
+          </div>
+          {% if result %}
+            <span class="mode-badge mode-badge--{{ result_mode }}">
+              {{ 'Через ИИ' if result_mode == 'ai' else 'По шаблону' }}
+            </span>
+          {% endif %}
+        </div>
+
+        <div class="result-body">
+          {% if result %}
+            <pre class="post-text" id="postText">{{ result }}</pre>
+          {% else %}
+            <div class="empty-state">
+              <span class="empty-icon">
+                <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M7 4h10a2 2 0 0 1 2 2v14l-7-3-7 3V6a2 2 0 0 1 2-2Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+                  <path d="M9 8h6M9 11h4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+                </svg>
+              </span>
+              <h3>Здесь появится ваш пост</h3>
+              <p>Заполните данные о товаре и нажмите «Сформировать пост».</p>
+            </div>
+          {% endif %}
+        </div>
+
+        <div class="result-actions">
+          <button type="button" class="btn btn--copy" id="copyBtn" {% if not result %}disabled{% endif %}>
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <rect x="9" y="9" width="10" height="10" rx="2" stroke="currentColor" stroke-width="1.7"/>
+              <path d="M15 9V6a1 1 0 0 0-1-1H6a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h3" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+            </svg>
+            <span>Скопировать пост</span>
+          </button>
+          <span class="copy-status" id="copyStatus" role="status" aria-live="polite"></span>
+        </div>
+      </section>
+    </section>
+
+    <footer class="footer">
+      Стиль постов настраивается в <code>voice.md</code> · ключ и модель — в <code>.env</code>
+    </footer>
+  </main>
+
+  <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>

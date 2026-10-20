@@ -1,0 +1,18 @@
+# Переменные окружения
+.env
+
+# Виртуальное окружение
+.venv/
+venv/
+env/
+
+# Кэш Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# IDE / редакторы
+.idea/
+.vscode/
+.DS_Store
+
